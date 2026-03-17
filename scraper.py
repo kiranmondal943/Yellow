@@ -1,73 +1,70 @@
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+import time
 import pandas as pd
-from config import BASE_URL, QUERY, PAGES_TO_SCRAPE, HEADERS
-from utils import random_delay
 
 data = []
 
-def get_search_page(page):
-    params = {
-        "q": QUERY,
-        "page": page
-    }
-    response = requests.get(BASE_URL, params=params, headers=HEADERS)
-    return response.text
+def setup_driver():
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    return webdriver.Chrome(options=options)
 
 
-def parse_listing(html):
-    soup = BeautifulSoup(html, "lxml")
-    listings = soup.select(".company-card")  # may need adjustment
+def scrape():
+    driver = setup_driver()
+
+    url = "https://www.yellowpages.uz/en/search/?q=dental"
+    driver.get(url)
+
+    time.sleep(5)
+
+    listings = driver.find_elements(By.CSS_SELECTOR, "a[href*='/en/company/']")
 
     links = []
-    for listing in listings:
-        a_tag = listing.find("a", href=True)
-        if a_tag:
-            links.append("https://www.yellowpages.uz" + a_tag["href"])
-    
-    return links
+    for l in listings:
+        href = l.get_attribute("href")
+        if href and href not in links:
+            links.append(href)
 
+    print(f"Found {len(links)} links")
 
-def parse_detail(url):
-    try:
-        response = requests.get(url, headers=HEADERS)
-        soup = BeautifulSoup(response.text, "lxml")
+    for link in links[:20]:  # limit for safety
+        driver.get(link)
+        time.sleep(3)
 
-        name = soup.find("h1")
-        email = soup.find("a", href=lambda x: x and "mailto" in x)
-        address = soup.find("address")
+        try:
+            name = driver.find_element(By.TAG_NAME, "h1").text
+        except:
+            name = ""
 
-        return {
-            "Name": name.text.strip() if name else "",
-            "Email": email.text.strip() if email else "",
-            "Address": address.text.strip() if address else "",
-            "URL": url
-        }
+        try:
+            email_elem = driver.find_element(By.XPATH, "//a[contains(@href,'mailto')]")
+            email = email_elem.text
+        except:
+            email = ""
 
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
+        try:
+            address = driver.find_element(By.TAG_NAME, "address").text
+        except:
+            address = ""
 
+        data.append({
+            "Name": name,
+            "Email": email,
+            "Address": address,
+            "URL": link
+        })
 
-def main():
-    for page in range(1, PAGES_TO_SCRAPE + 1):
-        print(f"Scraping page {page}")
-        
-        html = get_search_page(page)
-        links = parse_listing(html)
-
-        for link in links:
-            print(f"Scraping: {link}")
-            item = parse_detail(link)
-            if item:
-                data.append(item)
-
-            random_delay()
+    driver.quit()
 
     df = pd.DataFrame(data)
     df.to_csv("output/data.csv", index=False)
-    print("✅ Data saved to output/data.csv")
+    print("✅ Data saved")
 
 
 if __name__ == "__main__":
-    main()
+    scrape()
